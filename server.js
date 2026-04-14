@@ -1,5 +1,5 @@
 // ==========================================
-// GLOWNEST BACKEND - REFERRAL SYSTEM ENABLED
+// GLOWNEST BACKEND - AUTO-SYNC ENABLED
 // ==========================================
 
 const express = require('express');
@@ -13,7 +13,7 @@ app.use(cors());
 app.use(express.json());
 
 // 1. DATABASE CONNECTIVITY
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://admin:2791126SP@admin.ucd6skx.mongodb.net/glownest?retryWrites=true&w=majority';
+const MONGODB_URI = process.env.MONGODB_URI;
 
 mongoose.connect(MONGODB_URI)
     .then(() => console.log("✅ DATABASE STATUS: CONNECTED TO CLOUD"))
@@ -25,7 +25,6 @@ const userSchema = new mongoose.Schema({
     password: { type: String, required: true },
     balance: { type: Number, default: 0 },
     spent: { type: Number, default: 0 },
-    // REFERRAL FIELDS ADDED
     referralCode: { type: String, unique: true },
     referralBalance: { type: Number, default: 0 },
     referredBy: { type: String, default: null }
@@ -33,7 +32,7 @@ const userSchema = new mongoose.Schema({
 const User = mongoose.model('User', userSchema);
 
 const serviceSchema = new mongoose.Schema({
-    serviceId: String,
+    serviceId: { type: String, unique: true },
     name: String,
     category: String,
     price: Number,
@@ -56,10 +55,10 @@ const Order = mongoose.model('Order', orderSchema);
 
 // 3. API CONFIGURATION
 const SHWEBOOST_API = "https://shweboost.com/api/v2";
-const MY_API_KEY = "b9add3c4b63fb0e7cc7a01362f8eb69d";
+const MY_API_KEY = process.env.SHWEBOOST_API_KEY || "b9add3c4b63fb0e7cc7a01362f8eb69d";
 
 // ==========================================
-// AUTO SYNC LOGIC
+// AUTO SYNC LOGIC (The "Magic" Part)
 // ==========================================
 
 async function syncOrderStatuses() {
@@ -83,14 +82,22 @@ async function syncOrderStatuses() {
 
 async function syncServices() {
     try {
+        console.log("🔄 Starting Service Sync with ShweBoost...");
         const response = await axios.get(SHWEBOOST_API, {
             params: { key: MY_API_KEY, action: 'services' }
         });
+        
         if (Array.isArray(response.data)) {
-            const ADJUSTED_EXCHANGE = 2100;
+            // SETTINGS: Edit these to change your profit
+            const ADJUSTED_EXCHANGE = 3500; // MMK per 1 USD
+            const PROFIT_PERCENT = 1.20;    // 20% Profit Margin (1.20 = 20%)
+
             for (let s of response.data) {
                 const usdRate = parseFloat(s.rate);
-                const finalPrice = Math.ceil(usdRate * ADJUSTED_EXCHANGE * 2); 
+                // Formula: (USD Rate * Exchange Rate) * Profit Margin
+                const rawPrice = usdRate * ADJUSTED_EXCHANGE * PROFIT_PERCENT;
+                const finalPrice = Math.ceil(rawPrice); 
+
                 await Service.findOneAndUpdate(
                     { serviceId: s.service },
                     { 
@@ -103,10 +110,12 @@ async function syncServices() {
                     { upsert: true }
                 );
             }
+            console.log("✅ Sync Complete: Services Updated.");
         }
     } catch (err) { console.log("❌ Service Sync Error: " + err.message); }
 }
 
+// TIMERS: Status every 10 mins, Services every 1 hour
 setInterval(syncOrderStatuses, 600000);
 setInterval(syncServices, 3600000);
 
@@ -116,7 +125,7 @@ app.get('/api/services', async (req, res) => {
     res.json(localData);
 });
 
-// SIGN UP WITH REFERRAL LOGIC
+// SIGN UP
 app.post('/api/signup', async (req, res) => {
     const { email, password, ref } = req.body;
     try {
@@ -124,8 +133,6 @@ app.post('/api/signup', async (req, res) => {
         if (existingUser) return res.json({ success: false, error: "User exists" });
 
         const hashedPassword = await bcrypt.hash(password, 10);
-        
-        // လူတိုင်းအတွက် unique referral code ထုတ်ပေးခြင်း
         const myRefCode = "REF" + Math.random().toString(36).substring(2, 8).toUpperCase();
         
         const newUser = new User({ 
@@ -138,7 +145,6 @@ app.post('/api/signup', async (req, res) => {
 
         await newUser.save();
 
-        // တကယ်လို့ တစ်ယောက်ယောက်ရဲ့ Link ကနေလာတာဆိုရင် အဲဒီလူကို ၅၀ ကျပ်ပေးမယ်
         if (ref) {
             await User.updateOne(
                 { referralCode: ref },
@@ -181,26 +187,23 @@ app.get('/api/user/:email', async (req, res) => {
     } catch (err) { res.status(500).json({ success: false }); }
 });
 
-// REFERRAL CLAIM ROUTE (၁၀၀၀ ပြည့်မှ သွင်းပေးရန်)
 app.post('/api/referral/claim', async (req, res) => {
     const { email } = req.body;
     try {
         const user = await User.findOne({ email });
         if (!user) return res.json({ success: false, error: "User not found" });
-
         if (user.referralBalance < 1000) {
             return res.json({ success: false, error: "အနည်းဆုံး ၁၀၀၀ ကျပ်ပြည့်မှ ထည့်သွင်းနိုင်ပါမည်။" });
         }
-
         const amountToTransfer = user.referralBalance;
         user.balance += amountToTransfer;
-        user.referralBalance = 0; // Balance ကို reset ပြန်လုပ်မယ်
+        user.referralBalance = 0; 
         await user.save();
-
         res.json({ success: true, newBalance: user.balance });
     } catch (err) { res.status(500).json({ success: false }); }
 });
 
+// ORDER LOGIC
 app.post('/api/order', async (req, res) => {
     const { userEmail, serviceId, serviceName, link, quantity, charge } = req.body;
     const finalCharge = typeof charge === 'string' ? parseFloat(charge.replace(/[^0-9.]/g, '')) : charge;
@@ -254,7 +257,7 @@ app.get('/api/orders/:email', async (req, res) => {
     } catch (err) { res.status(500).json({ success: false }); }
 });
 
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => {
     console.log(`🚀 GLOWNEST ACTIVE ON PORT ${PORT}`);
     syncOrderStatuses();
