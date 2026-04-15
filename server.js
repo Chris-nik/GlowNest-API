@@ -58,7 +58,7 @@ const SHWEBOOST_API = "https://shweboost.com/api/v2";
 const MY_API_KEY = process.env.SHWEBOOST_API_KEY || "b9add3c4b63fb0e7cc7a01362f8eb69d";
 
 // ==========================================
-// AUTO SYNC LOGIC (The "Magic" Part)
+// AUTO SYNC LOGIC
 // ==========================================
 
 async function syncOrderStatuses() {
@@ -88,13 +88,11 @@ async function syncServices() {
         });
         
         if (Array.isArray(response.data)) {
-            // SETTINGS: Edit these to change your profit
-            const ADJUSTED_EXCHANGE = 3500; // MMK per 1 USD
-            const PROFIT_PERCENT = 1.20;    // 20% Profit Margin (1.20 = 20%)
+            const ADJUSTED_EXCHANGE = 3500; 
+            const PROFIT_PERCENT = 1.20; 
 
             for (let s of response.data) {
                 const usdRate = parseFloat(s.rate);
-                // Formula: (USD Rate * Exchange Rate) * Profit Margin
                 const rawPrice = usdRate * ADJUSTED_EXCHANGE * PROFIT_PERCENT;
                 const finalPrice = Math.ceil(rawPrice); 
 
@@ -115,7 +113,6 @@ async function syncServices() {
     } catch (err) { console.log("❌ Service Sync Error: " + err.message); }
 }
 
-// TIMERS: Status every 10 mins, Services every 1 hour
 setInterval(syncOrderStatuses, 600000);
 setInterval(syncServices, 3600000);
 
@@ -125,7 +122,6 @@ app.get('/api/services', async (req, res) => {
     res.json(localData);
 });
 
-// SIGN UP
 app.post('/api/signup', async (req, res) => {
     const { email, password, ref } = req.body;
     try {
@@ -195,17 +191,18 @@ app.post('/api/referral/claim', async (req, res) => {
         if (user.referralBalance < 1000) {
             return res.json({ success: false, error: "အနည်းဆုံး ၁၀၀၀ ကျပ်ပြည့်မှ ထည့်သွင်းနိုင်ပါမည်။" });
         }
-        const amountToTransfer = user.referralBalance;
-        user.balance += amountToTransfer;
+        user.balance += user.referralBalance;
         user.referralBalance = 0; 
         await user.save();
         res.json({ success: true, newBalance: user.balance });
     } catch (err) { res.status(500).json({ success: false }); }
 });
 
-// ORDER LOGIC
+// ==========================================
+// UPDATED ORDER LOGIC (Fixes TikTok Comment Error)
+// ==========================================
 app.post('/api/order', async (req, res) => {
-    const { userEmail, serviceId, serviceName, link, quantity, charge } = req.body;
+    const { userEmail, serviceId, serviceName, link, quantity, charge, comments } = req.body;
     const finalCharge = typeof charge === 'string' ? parseFloat(charge.replace(/[^0-9.]/g, '')) : charge;
 
     try {
@@ -218,15 +215,21 @@ app.post('/api/order', async (req, res) => {
         user.spent += finalCharge;
         await user.save();
 
-        const shweResponse = await axios.get(SHWEBOOST_API, {
-            params: {
-                key: MY_API_KEY,
-                action: 'add',
-                service: serviceId,
-                link: link,
-                quantity: quantity
-            }
-        });
+        // API Params တွင် comments ပါလာလျှင် ထည့်သွင်းပေးရန်ပြင်ဆင်ခြင်း
+        const apiParams = {
+            key: MY_API_KEY,
+            action: 'add',
+            service: serviceId,
+            link: link,
+            quantity: quantity
+        };
+
+        // အကယ်၍ Custom Comments ပါလာခဲ့လျှင် ShweBoost ဆီသို့ ပို့ပေးမည်
+        if (comments) {
+            apiParams.comments = comments;
+        }
+
+        const shweResponse = await axios.get(SHWEBOOST_API, { params: apiParams });
 
         if (shweResponse.data && shweResponse.data.order) {
             const newOrder = new Order({
@@ -240,6 +243,7 @@ app.post('/api/order', async (req, res) => {
             await newOrder.save();
             res.json({ success: true, orderId: shweResponse.data.order });
         } else {
+            // Error ဖြစ်ပါက ပိုက်ဆံပြန်အမ်းပေးခြင်း
             user.balance += finalCharge;
             user.spent -= finalCharge;
             await user.save();
