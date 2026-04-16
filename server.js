@@ -67,7 +67,7 @@ async function syncOrderStatuses() {
             status: { $in: ['Pending', 'In Progress', 'Processing', 'Partial'] } 
         });
         for (let order of activeOrders) {
-            const response = await axios.get(SHWEBOOST_API, {
+            const response = await axios.post(SHWEBOOST_API, null, {
                 params: { key: MY_API_KEY, action: 'status', order: order.shweOrderId }
             });
             if (response.data && response.data.status) {
@@ -82,8 +82,7 @@ async function syncOrderStatuses() {
 
 async function syncServices() {
     try {
-        console.log("🔄 Starting Service Sync with ShweBoost...");
-        const response = await axios.get(SHWEBOOST_API, {
+        const response = await axios.post(SHWEBOOST_API, null, {
             params: { key: MY_API_KEY, action: 'services' }
         });
         
@@ -199,7 +198,7 @@ app.post('/api/referral/claim', async (req, res) => {
 });
 
 // ==========================================
-// UPDATED ORDER LOGIC (Fixes TikTok Comment Error)
+// UPDATED ORDER LOGIC (Final TikTok Fix)
 // ==========================================
 app.post('/api/order', async (req, res) => {
     const { userEmail, serviceId, serviceName, link, quantity, charge, comments } = req.body;
@@ -211,11 +210,7 @@ app.post('/api/order', async (req, res) => {
             return res.json({ success: false, error: "Insufficient balance!" });
         }
 
-        user.balance -= finalCharge;
-        user.spent += finalCharge;
-        await user.save();
-
-        // API Params တွင် comments ပါလာလျှင် ထည့်သွင်းပေးရန်ပြင်ဆင်ခြင်း
+        // ShweBoost API Parameters
         const apiParams = {
             key: MY_API_KEY,
             action: 'add',
@@ -224,14 +219,20 @@ app.post('/api/order', async (req, res) => {
             quantity: quantity
         };
 
-        // အကယ်၍ Custom Comments ပါလာခဲ့လျှင် ShweBoost ဆီသို့ ပို့ပေးမည်
-        if (comments) {
-            apiParams.comments = comments;
+        // TikTok Comment ပါရင် ထည့်ပေါင်းမယ်
+        if (comments && comments.trim() !== "") {
+            apiParams.comments = comments.trim();
         }
 
-        const shweResponse = await axios.get(SHWEBOOST_API, { params: apiParams });
+        // ShweBoost API ကို ခေါ်ဆိုခြင်း (Using params for consistency)
+        const shweResponse = await axios.post(SHWEBOOST_API, null, { params: apiParams });
 
         if (shweResponse.data && shweResponse.data.order) {
+            // အော်ဒါအောင်မြင်မှ balance နှုတ်မယ်
+            user.balance -= finalCharge;
+            user.spent += finalCharge;
+            await user.save();
+
             const newOrder = new Order({
                 userEmail,
                 shweOrderId: shweResponse.data.order,
@@ -243,13 +244,10 @@ app.post('/api/order', async (req, res) => {
             await newOrder.save();
             res.json({ success: true, orderId: shweResponse.data.order });
         } else {
-            // Error ဖြစ်ပါက ပိုက်ဆံပြန်အမ်းပေးခြင်း
-            user.balance += finalCharge;
-            user.spent -= finalCharge;
-            await user.save();
-            res.json({ success: false, error: shweResponse.data.error || "Provider Error" });
+            res.json({ success: false, error: shweResponse.data.error || "Provider API Error" });
         }
     } catch (err) { 
+        console.error("Order process error:", err.message);
         res.json({ success: false, error: "Server connection error" }); 
     }
 });
