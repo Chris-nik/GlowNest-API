@@ -1,14 +1,13 @@
 // ==========================================
-// GLOWNEST BACKEND - AUTO-SYNC & TELEGRAM BOT ENABLED
+// GLOWNEST BACKEND - CORE API & AUTO-SYNC
 // ==========================================
 
-require('dotenv').config(); // 👈 ၁။ Environment variable တွေဖတ်ဖို့ ဒါကို ထိပ်ဆုံးမှာ ထည့်ရပါမယ်
+require('dotenv').config();
 const express = require('express');
 const axios = require('axios');
 const cors = require('cors');
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
-const TelegramBot = require('node-telegram-bot-api');
 
 const app = express();
 app.use(cors());
@@ -21,40 +20,17 @@ mongoose.connect(MONGODB_URI)
     .then(() => {
         console.log("✅ DATABASE STATUS: CONNECTED TO CLOUD");
         
-        // 👈 ၂။ Database ချိတ်ဆက်ပြီးမှ Server ကို စတင်ဖွင့်ပါမယ်
         const PORT = process.env.PORT || 10000;
         app.listen(PORT, () => {
-            console.log(`🚀 GLOWNEST SERVER & BOT ACTIVE ON PORT ${PORT}`);
+            console.log(`🚀 GLOWNEST SERVER ACTIVE ON PORT ${PORT}`);
             syncOrderStatuses();
             syncServices();
         });
     })
     .catch(err => {
         console.log("❌ DATABASE STATUS: FAILED", err);
-        process.exit(1); // ချိတ်မရရင် error နဲ့ ရပ်လိုက်ပါမယ်
+        process.exit(1);
     });
-
-// ------------------------------------------
-// TELEGRAM BOT CONFIGURATION
-// ------------------------------------------
-const token = '8439630262:AAEdEcF9lbA1QpgtAsutm_X9pzOAH50NgQI';
-const bot = new TelegramBot(token, {polling: true});
-const ADMIN_CHAT_ID = '6013443314'; 
-
-bot.onText(/\/start/, (msg) => {
-    bot.sendMessage(msg.chat.id, "👋 GlowNest Add Fund Bot မှ ကြိုဆိုပါတယ်! \n\nငွေဖြည့်ရန်အတွက် /addfund [email] [ပမာဏ] ဟု ရိုက်ပို့ပါ။ \nဥပမာ - /addfund example@gmail.com 5000");
-});
-
-bot.onText(/\/addfund (.+) (.+)/, (msg, match) => {
-    const email = match[1];
-    const amount = match[2];
-    bot.sendMessage(msg.chat.id, `✅ လက်ခံရရှိပါပြီ။ \n\n${amount} MMK ကို KPay/Wave 09xxxxxxx သို့ လွှဲပေးပါ။ \nလွှဲပြီးလျှင် Screenshot ကို ဒီနေရာမှာ ပို့ပေးပါ။ Admin မှ စစ်ဆေးပြီး balance ထည့်ပေးပါမည်။`);
-});
-
-bot.on('photo', (msg) => {
-    bot.forwardMessage(ADMIN_CHAT_ID, msg.chat.id, msg.message_id);
-    bot.sendMessage(msg.chat.id, "📩 ငွေလွှဲချက်ကို Admin ဆီ ပို့ထားပေးပါပြီ။ ခဏစောင့်ပေးပါ။");
-});
 
 // ------------------------------------------
 // 2. SCHEMAS & MODELS
