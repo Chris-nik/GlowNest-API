@@ -2,12 +2,13 @@
 // GLOWNEST BACKEND - AUTO-SYNC & TELEGRAM BOT ENABLED
 // ==========================================
 
+require('dotenv').config(); // 👈 ၁။ Environment variable တွေဖတ်ဖို့ ဒါကို ထိပ်ဆုံးမှာ ထည့်ရပါမယ်
 const express = require('express');
 const axios = require('axios');
 const cors = require('cors');
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
-const TelegramBot = require('node-telegram-bot-api'); // 👈 Bot Library အသစ်
+const TelegramBot = require('node-telegram-bot-api');
 
 const app = express();
 app.use(cors());
@@ -17,15 +18,28 @@ app.use(express.json());
 const MONGODB_URI = process.env.MONGODB_URI;
 
 mongoose.connect(MONGODB_URI)
-    .then(() => console.log("✅ DATABASE STATUS: CONNECTED TO CLOUD"))
-    .catch(err => console.log("❌ DATABASE STATUS: FAILED", err));
+    .then(() => {
+        console.log("✅ DATABASE STATUS: CONNECTED TO CLOUD");
+        
+        // 👈 ၂။ Database ချိတ်ဆက်ပြီးမှ Server ကို စတင်ဖွင့်ပါမယ်
+        const PORT = process.env.PORT || 10000;
+        app.listen(PORT, () => {
+            console.log(`🚀 GLOWNEST SERVER & BOT ACTIVE ON PORT ${PORT}`);
+            syncOrderStatuses();
+            syncServices();
+        });
+    })
+    .catch(err => {
+        console.log("❌ DATABASE STATUS: FAILED", err);
+        process.exit(1); // ချိတ်မရရင် error နဲ့ ရပ်လိုက်ပါမယ်
+    });
 
 // ------------------------------------------
-// TELEGRAM BOT CONFIGURATION (NEW)
+// TELEGRAM BOT CONFIGURATION
 // ------------------------------------------
-const token = '8439630262:AAEdEcF9lbA1QpgtAsutm_X9pzOAH50NgQI'; //
+const token = '8439630262:AAEdEcF9lbA1QpgtAsutm_X9pzOAH50NgQI';
 const bot = new TelegramBot(token, {polling: true});
-const ADMIN_CHAT_ID = '6013443314'; // မင်းရဲ့ Chat ID
+const ADMIN_CHAT_ID = '6013443314'; 
 
 bot.onText(/\/start/, (msg) => {
     bot.sendMessage(msg.chat.id, "👋 GlowNest Add Fund Bot မှ ကြိုဆိုပါတယ်! \n\nငွေဖြည့်ရန်အတွက် /addfund [email] [ပမာဏ] ဟု ရိုက်ပို့ပါ။ \nဥပမာ - /addfund example@gmail.com 5000");
@@ -41,9 +55,10 @@ bot.on('photo', (msg) => {
     bot.forwardMessage(ADMIN_CHAT_ID, msg.chat.id, msg.message_id);
     bot.sendMessage(msg.chat.id, "📩 ငွေလွှဲချက်ကို Admin ဆီ ပို့ထားပေးပါပြီ။ ခဏစောင့်ပေးပါ။");
 });
-// ------------------------------------------
 
+// ------------------------------------------
 // 2. SCHEMAS & MODELS
+// ------------------------------------------
 const userSchema = new mongoose.Schema({
     email: { type: String, unique: true, required: true },
     password: { type: String, required: true },
@@ -77,11 +92,12 @@ const orderSchema = new mongoose.Schema({
 });
 const Order = mongoose.model('Order', orderSchema);
 
-// 3. API CONFIGURATION
+// ------------------------------------------
+// 3. API CONFIGURATION & SYNC LOGIC
+// ------------------------------------------
 const SHWEBOOST_API = "https://shweboost.com/api/v2";
 const MY_API_KEY = process.env.SHWEBOOST_API_KEY || "b9add3c4b63fb0e7cc7a01362f8eb69d";
 
-// AUTO SYNC LOGIC
 async function syncOrderStatuses() {
     try {
         const activeOrders = await Order.find({ 
@@ -136,10 +152,14 @@ async function syncServices() {
 setInterval(syncOrderStatuses, 600000);
 setInterval(syncServices, 3600000);
 
+// ------------------------------------------
 // 4. ROUTES
+// ------------------------------------------
 app.get('/api/services', async (req, res) => {
-    const localData = await Service.find().sort({ category: 1 });
-    res.json(localData);
+    try {
+        const localData = await Service.find().sort({ category: 1 });
+        res.json(localData);
+    } catch (err) { res.status(500).json([]); }
 });
 
 app.post('/api/signup', async (req, res) => {
@@ -271,11 +291,4 @@ app.get('/api/orders/:email', async (req, res) => {
         const orders = await Order.find({ userEmail: req.params.email }).sort({ date: -1 });
         res.json({ success: true, orders });
     } catch (err) { res.status(500).json({ success: false }); }
-});
-
-const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => {
-    console.log(`🚀 GLOWNEST SERVER & BOT ACTIVE ON PORT ${PORT}`);
-    syncOrderStatuses();
-    syncServices();
 });
