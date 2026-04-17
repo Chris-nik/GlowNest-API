@@ -1,5 +1,5 @@
 // ==========================================
-// GLOWNEST BACKEND - AUTO-SYNC ENABLED
+// GLOWNEST BACKEND - AUTO-SYNC & TELEGRAM BOT ENABLED
 // ==========================================
 
 const express = require('express');
@@ -7,6 +7,7 @@ const axios = require('axios');
 const cors = require('cors');
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
+const TelegramBot = require('node-telegram-bot-api'); // 👈 Bot Library အသစ်
 
 const app = express();
 app.use(cors());
@@ -18,6 +19,29 @@ const MONGODB_URI = process.env.MONGODB_URI;
 mongoose.connect(MONGODB_URI)
     .then(() => console.log("✅ DATABASE STATUS: CONNECTED TO CLOUD"))
     .catch(err => console.log("❌ DATABASE STATUS: FAILED", err));
+
+// ------------------------------------------
+// TELEGRAM BOT CONFIGURATION (NEW)
+// ------------------------------------------
+const token = '8439630262:AAEdEcF9lbA1QpgtAsutm_X9pzOAH50NgQI'; //
+const bot = new TelegramBot(token, {polling: true});
+const ADMIN_CHAT_ID = '6013443314'; // မင်းရဲ့ Chat ID
+
+bot.onText(/\/start/, (msg) => {
+    bot.sendMessage(msg.chat.id, "👋 GlowNest Add Fund Bot မှ ကြိုဆိုပါတယ်! \n\nငွေဖြည့်ရန်အတွက် /addfund [email] [ပမာဏ] ဟု ရိုက်ပို့ပါ။ \nဥပမာ - /addfund example@gmail.com 5000");
+});
+
+bot.onText(/\/addfund (.+) (.+)/, (msg, match) => {
+    const email = match[1];
+    const amount = match[2];
+    bot.sendMessage(msg.chat.id, `✅ လက်ခံရရှိပါပြီ။ \n\n${amount} MMK ကို KPay/Wave 09xxxxxxx သို့ လွှဲပေးပါ။ \nလွှဲပြီးလျှင် Screenshot ကို ဒီနေရာမှာ ပို့ပေးပါ။ Admin မှ စစ်ဆေးပြီး balance ထည့်ပေးပါမည်။`);
+});
+
+bot.on('photo', (msg) => {
+    bot.forwardMessage(ADMIN_CHAT_ID, msg.chat.id, msg.message_id);
+    bot.sendMessage(msg.chat.id, "📩 ငွေလွှဲချက်ကို Admin ဆီ ပို့ထားပေးပါပြီ။ ခဏစောင့်ပေးပါ။");
+});
+// ------------------------------------------
 
 // 2. SCHEMAS & MODELS
 const userSchema = new mongoose.Schema({
@@ -57,10 +81,7 @@ const Order = mongoose.model('Order', orderSchema);
 const SHWEBOOST_API = "https://shweboost.com/api/v2";
 const MY_API_KEY = process.env.SHWEBOOST_API_KEY || "b9add3c4b63fb0e7cc7a01362f8eb69d";
 
-// ==========================================
 // AUTO SYNC LOGIC
-// ==========================================
-
 async function syncOrderStatuses() {
     try {
         const activeOrders = await Order.find({ 
@@ -197,9 +218,6 @@ app.post('/api/referral/claim', async (req, res) => {
     } catch (err) { res.status(500).json({ success: false }); }
 });
 
-// ==========================================
-// UPDATED ORDER LOGIC (Final TikTok Fix)
-// ==========================================
 app.post('/api/order', async (req, res) => {
     const { userEmail, serviceId, serviceName, link, quantity, charge, comments } = req.body;
     const finalCharge = typeof charge === 'string' ? parseFloat(charge.replace(/[^0-9.]/g, '')) : charge;
@@ -210,7 +228,6 @@ app.post('/api/order', async (req, res) => {
             return res.json({ success: false, error: "Insufficient balance!" });
         }
 
-        // ShweBoost API Parameters
         const apiParams = {
             key: MY_API_KEY,
             action: 'add',
@@ -219,16 +236,13 @@ app.post('/api/order', async (req, res) => {
             quantity: quantity
         };
 
-        // TikTok Comment ပါရင် ထည့်ပေါင်းမယ်
         if (comments && comments.trim() !== "") {
             apiParams.comments = comments.trim();
         }
 
-        // ShweBoost API ကို ခေါ်ဆိုခြင်း (Using params for consistency)
         const shweResponse = await axios.post(SHWEBOOST_API, null, { params: apiParams });
 
         if (shweResponse.data && shweResponse.data.order) {
-            // အော်ဒါအောင်မြင်မှ balance နှုတ်မယ်
             user.balance -= finalCharge;
             user.spent += finalCharge;
             await user.save();
@@ -261,7 +275,7 @@ app.get('/api/orders/:email', async (req, res) => {
 
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => {
-    console.log(`🚀 GLOWNEST ACTIVE ON PORT ${PORT}`);
+    console.log(`🚀 GLOWNEST SERVER & BOT ACTIVE ON PORT ${PORT}`);
     syncOrderStatuses();
     syncServices();
 });
