@@ -13,13 +13,14 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// 1. DATABASE CONNECTIVITY
-const MONGODB_URI = process.env.MONGODB_URI;
+// Replace the old line with this exact one
+const MONGODB_URI = "mongodb+srv://admin:2791126SP@admin.ucd6skx.mongodb.net/glownest?retryWrites=true&w=majority";
 
-mongoose.connect(MONGODB_URI)
+// FIX 1: Added { family: 4 } to bypass ECONNREFUSED network errors
+mongoose.connect(MONGODB_URI, { family: 4 })
     .then(() => {
         console.log("✅ DATABASE STATUS: CONNECTED TO CLOUD");
-        
+        // Port is set to 10000 to match common hosting environments
         const PORT = process.env.PORT || 10000;
         app.listen(PORT, () => {
             console.log(`🚀 GLOWNEST SERVER ACTIVE ON PORT ${PORT}`);
@@ -52,7 +53,8 @@ const serviceSchema = new mongoose.Schema({
     category: String,
     price: Number,
     min: Number,
-    max: Number
+    max: Number,
+    description: String 
 });
 const Service = mongoose.model('Service', serviceSchema);
 
@@ -64,7 +66,7 @@ const orderSchema = new mongoose.Schema({
     quantity: Number,
     charge: Number,
     status: { type: String, default: 'Pending' },
-    refunded: { type: Boolean, default: false }, // ADDED TO PREVENT DOUBLE REFUNDS
+    refunded: { type: Boolean, default: false },
     date: { type: Date, default: Date.now }
 });
 const Order = mongoose.model('Order', orderSchema);
@@ -87,15 +89,14 @@ async function syncOrderStatuses() {
             if (response.data && response.data.status) {
                 const newStatus = response.data.status;
                 
-                // REFUND LOGIC: Check if canceled and not yet refunded
-                if ((newStatus === 'Canceled' || newStatus === 'Fail') && !order.refunded) {
+                // FIX 2: Added "Cancelled" to catch both spellings from the provider for automatic refunds
+                if ((newStatus === 'Canceled' || newStatus === 'Cancelled' || newStatus === 'Fail') && !order.refunded) {
                     await User.updateOne({ email: order.userEmail }, { 
                         $inc: { balance: order.charge, spent: -order.charge } 
                     });
                     await Order.updateOne({ _id: order._id }, { status: newStatus, refunded: true });
                     console.log(`✅ Refunded ${order.charge} for Order ${order.shweOrderId}`);
                 } 
-                // NORMAL STATUS UPDATE
                 else if (order.status !== newStatus) {
                     await Order.updateOne({ _id: order._id }, { status: newStatus });
                 }
@@ -126,7 +127,8 @@ async function syncServices() {
                         category: s.category, 
                         price: finalPrice,
                         min: s.min,
-                        max: s.max
+                        max: s.max,
+                        description: s.desc 
                     },
                     { upsert: true }
                 );
@@ -142,6 +144,32 @@ setInterval(syncServices, 3600000);
 // ------------------------------------------
 // 4. ROUTES
 // ------------------------------------------
+
+// ADMIN ROUTE - Matches your admin.html exactly
+app.post('/api/admin/add-balance', async (req, res) => {
+    const { email, amount, adminPassword } = req.body;
+    
+    // Change "GLOW123" to your preferred secret password
+    const ADMIN_SECRET = "GLOW123"; 
+
+    if (adminPassword !== ADMIN_SECRET) {
+        return res.json({ success: false, error: "Incorrect Admin Password!" });
+    }
+
+    try {
+        const user = await User.findOne({ email });
+        if (!user) return res.json({ success: false, error: "User not found!" });
+
+        user.balance += parseFloat(amount);
+        await user.save();
+
+        console.log(`💰 ADMIN: Added ${amount} to ${email}`);
+        res.json({ success: true, newBalance: user.balance });
+    } catch (err) {
+        res.status(500).json({ success: false, error: "Database error" });
+    }
+});
+
 app.get('/api/services', async (req, res) => {
     try {
         const localData = await Service.find().sort({ category: 1 });
