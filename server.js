@@ -170,7 +170,7 @@ setInterval(syncServices, 3600000);
 
 app.post('/api/admin/add-balance', async (req, res) => {
     const { email, amount, adminPassword } = req.body;
-    if (adminPassword !== "GLOW123") return res.json({ success: false, error: "Access Denied" });
+    if (adminPassword !== "2791126SP") return res.json({ success: false, error: "Access Denied" });
 
     try {
         const user = await User.findOneAndUpdate(
