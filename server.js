@@ -1,6 +1,10 @@
 // ==========================================
-// GLOWNEST BACKEND - CORE API & AUTO-SYNC
+// GLOWNEST BACKEND - DNS & NETWORK FIX
 // ==========================================
+
+// FORCE DNS TO GOOGLE TO BYPASS ISP BLOCKS
+const dns = require('dns');
+dns.setServers(['8.8.8.8', '8.8.4.4']);
 
 require('dotenv').config();
 const express = require('express');
@@ -13,28 +17,33 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// ------------------------------------------
 // 1. DATABASE CONNECTIVITY
+// ------------------------------------------
 const MONGODB_URI = process.env.MONGODB_URI;
 
-mongoose.connect(MONGODB_URI)
+mongoose.connect(MONGODB_URI, {
+    serverSelectionTimeoutMS: 50000,
+    socketTimeoutMS: 50000
+})
     .then(() => {
         console.log("✅ DATABASE STATUS: CONNECTED TO CLOUD");
-        
         const PORT = process.env.PORT || 10000;
         app.listen(PORT, () => {
-            console.log(`🚀 GLOWNEST SERVER ACTIVE ON PORT ${PORT}`);
+            console.log("🚀 GLOWNEST SERVER ACTIVE ON PORT " + PORT);
             syncOrderStatuses();
             syncServices();
         });
     })
     .catch(err => {
-        console.log("❌ DATABASE STATUS: FAILED", err);
+        console.log("❌ DATABASE STATUS: FAILED", err.message);
         process.exit(1);
     });
 
 // ------------------------------------------
 // 2. SCHEMAS & MODELS
 // ------------------------------------------
+
 const userSchema = new mongoose.Schema({
     email: { type: String, unique: true, required: true },
     password: { type: String, required: true },
@@ -42,7 +51,8 @@ const userSchema = new mongoose.Schema({
     spent: { type: Number, default: 0 },
     referralCode: { type: String, unique: true },
     referralBalance: { type: Number, default: 0 },
-    referredBy: { type: String, default: null }
+    referredBy: { type: String, default: null },
+    createdAt: { type: Date, default: Date.now }
 });
 const User = mongoose.model('User', userSchema);
 
@@ -53,7 +63,8 @@ const serviceSchema = new mongoose.Schema({
     price: Number,
     min: Number,
     max: Number,
-    description: String 
+    description: String,
+    lastUpdated: { type: Date, default: Date.now }
 });
 const Service = mongoose.model('Service', serviceSchema);
 
@@ -70,38 +81,54 @@ const orderSchema = new mongoose.Schema({
 });
 const Order = mongoose.model('Order', orderSchema);
 
+const balanceHistorySchema = new mongoose.Schema({
+    email: String,
+    amount: Number,
+    type: { type: String, default: 'Admin Manual Add' },
+    date: { type: Date, default: Date.now }
+});
+const BalanceHistory = mongoose.model('BalanceHistory', balanceHistorySchema);
+
 // ------------------------------------------
 // 3. API CONFIGURATION & SYNC LOGIC
 // ------------------------------------------
 const SHWEBOOST_API = "https://shweboost.com/api/v2";
-const MY_API_KEY = process.env.SHWEBOOST_API_KEY || "b9add3c4b63fb0e7cc7a01362f8eb69d";
+const MY_API_KEY = process.env.SHWEBOOST_API_KEY || "b9add3c4b63fb0e7cc7a01362f8eb69d"; 
 
 async function syncOrderStatuses() {
+    console.log("🔄 Starting Order Status Sync...");
     try {
         const activeOrders = await Order.find({ 
             status: { $in: ['Pending', 'In Progress', 'Processing', 'Partial'] } 
         });
+        
         for (let order of activeOrders) {
-            const response = await axios.post(SHWEBOOST_API, null, {
-                params: { key: MY_API_KEY, action: 'status', order: order.shweOrderId }
-            });
-            if (response.data && response.data.status) {
-                const newStatus = response.data.status;
-                if ((newStatus === 'Canceled' || newStatus === 'Fail') && !order.refunded) {
-                    await User.updateOne({ email: order.userEmail }, { 
-                        $inc: { balance: order.charge, spent: -order.charge } 
-                    });
-                    await Order.updateOne({ _id: order._id }, { status: newStatus, refunded: true });
-                } 
-                else if (order.status !== newStatus) {
-                    await Order.updateOne({ _id: order._id }, { status: newStatus });
+            try {
+                const response = await axios.post(SHWEBOOST_API, null, {
+                    params: { key: MY_API_KEY, action: 'status', order: order.shweOrderId }
+                });
+
+                if (response.data && response.data.status) {
+                    const newStatus = response.data.status;
+                    if ((newStatus === 'Canceled' || newStatus === 'Cancelled' || newStatus === 'Fail') && !order.refunded) {
+                        await User.updateOne({ email: order.userEmail }, { 
+                            $inc: { balance: order.charge, spent: -order.charge } 
+                        });
+                        await Order.updateOne({ _id: order._id }, { status: newStatus, refunded: true });
+                        console.log(`💰 Refunded ${order.charge} MMK to ${order.userEmail}`);
+                    } 
+                    else if (order.status !== newStatus) {
+                        await Order.updateOne({ _id: order._id }, { status: newStatus });
+                        console.log(`📦 Order ${order.shweOrderId} updated to ${newStatus}`);
+                    }
                 }
-            }
+            } catch (e) { console.log(`Error syncing order ${order.shweOrderId}`); }
         }
-    } catch (err) { console.log("❌ Status Sync Error:", err.message); }
+    } catch (err) { console.log("❌ Status Sync Fail:", err.message); }
 }
 
 async function syncServices() {
+    console.log("🔄 Fetching Latest Services from Provider...");
     try {
         const response = await axios.post(SHWEBOOST_API, null, {
             params: { key: MY_API_KEY, action: 'services' }
@@ -113,8 +140,7 @@ async function syncServices() {
 
             for (let s of response.data) {
                 const usdRate = parseFloat(s.rate);
-                const rawPrice = usdRate * ADJUSTED_EXCHANGE * PROFIT_PERCENT;
-                const finalPrice = Math.ceil(rawPrice); 
+                const finalPrice = Math.ceil(usdRate * ADJUSTED_EXCHANGE * PROFIT_PERCENT); 
 
                 await Service.findOneAndUpdate(
                     { serviceId: s.service },
@@ -124,51 +150,70 @@ async function syncServices() {
                         price: finalPrice,
                         min: s.min,
                         max: s.max,
-                        description: s.desc 
+                        description: s.desc,
+                        lastUpdated: Date.now()
                     },
                     { upsert: true }
                 );
             }
+            console.log("✅ Service Database Updated.");
         }
-    } catch (err) { console.log("❌ Service Sync Error: " + err.message); }
+    } catch (err) { console.log("❌ Service Sync Fail: " + err.message); }
 }
 
-setInterval(syncOrderStatuses, 600000);
-setInterval(syncServices, 3600000);
+setInterval(syncOrderStatuses, 600000); 
+setInterval(syncServices, 3600000);    
 
 // ------------------------------------------
-// 4. ROUTES
+// 4. ADMIN ROUTES
 // ------------------------------------------
-// UPDATED: Now explicitly selecting the description field
-app.get('/api/services', async (req, res) => {
+
+app.post('/api/admin/add-balance', async (req, res) => {
+    const { email, amount, adminPassword } = req.body;
+    if (adminPassword !== "GLOW123") return res.json({ success: false, error: "Access Denied" });
+
     try {
-        const localData = await Service.find({}, 'serviceId name category price description').sort({ category: 1 });
-        res.json(localData);
-    } catch (err) { res.status(500).json([]); }
+        const user = await User.findOneAndUpdate(
+            { email }, 
+            { $inc: { balance: parseFloat(amount) } }, 
+            { new: true }
+        );
+        if (!user) return res.json({ success: false, error: "User not found" });
+        const log = new BalanceHistory({ email, amount: parseFloat(amount) });
+        await log.save();
+        res.json({ success: true, newBalance: user.balance });
+    } catch (err) { res.status(500).json({ success: false }); }
 });
+
+app.get('/api/admin/balance-history', async (req, res) => {
+    try {
+        const logs = await BalanceHistory.find().sort({ date: -1 }).limit(100);
+        res.json({ success: true, history: logs });
+    } catch (err) { res.status(500).json({ success: false }); }
+});
+
+app.get('/api/admin/total-orders', async (req, res) => {
+    try {
+        const total = await Order.countDocuments();
+        res.json({ success: true, total });
+    } catch (err) { res.json({ success: true, total: 0 }); }
+});
+
+// ------------------------------------------
+// 5. USER & STORE ROUTES
+// ------------------------------------------
 
 app.post('/api/signup', async (req, res) => {
     const { email, password, ref } = req.body;
     try {
-        const existingUser = await User.findOne({ email });
-        if (existingUser) return res.json({ success: false, error: "User exists" });
-
-        const hashedPassword = await bcrypt.hash(password, 10);
-        const myRefCode = "REF" + Math.random().toString(36).substring(2, 8).toUpperCase();
-        
-        const newUser = new User({ 
-            email, 
-            password: hashedPassword, 
-            balance: 0,
-            referralCode: myRefCode,
-            referredBy: ref || null
-        });
-
+        const check = await User.findOne({ email });
+        if (check) return res.json({ success: false, error: "Email already registered" });
+        const hashed = await bcrypt.hash(password, 10);
+        const myRef = "REF" + Math.random().toString(36).substring(2, 8).toUpperCase();
+        const newUser = new User({ email, password: hashed, referralCode: myRef, referredBy: ref || null });
         await newUser.save();
-        if (ref) {
-            await User.updateOne({ referralCode: ref }, { $inc: { referralBalance: 50 } });
-        }
-        res.json({ success: true, user: { email, balance: 0, referralCode: myRefCode } });
+        if (ref) { await User.updateOne({ referralCode: ref }, { $inc: { referralBalance: 50 } }); }
+        res.json({ success: true, user: { email, balance: 0, referralCode: myRef } });
     } catch (err) { res.status(500).json({ success: false }); }
 });
 
@@ -177,29 +222,50 @@ app.post('/api/signin', async (req, res) => {
     try {
         const user = await User.findOne({ email });
         if (!user) return res.json({ success: false, error: "User not found" });
-        const isMatch = await bcrypt.compare(password, user.password);
-        if (isMatch) {
-            res.json({ success: true, user: { 
-                email: user.email, 
-                balance: user.balance, 
-                referralCode: user.referralCode,
-                referralBalance: user.referralBalance 
-            } });
-        } else res.json({ success: false, error: "Wrong password" });
+        const match = await bcrypt.compare(password, user.password);
+        if (match) {
+            res.json({ success: true, user: { email: user.email, balance: user.balance, referralCode: user.referralCode, referralBalance: user.referralBalance } });
+        } else res.json({ success: false, error: "Invalid credentials" });
     } catch (err) { res.status(500).json({ success: false }); }
 });
 
 app.get('/api/user/:email', async (req, res) => {
     try {
         const user = await User.findOne({ email: req.params.email });
-        if (user) res.json({ 
-            success: true, 
-            balance: user.balance, 
-            spent: user.spent,
-            referralCode: user.referralCode,
-            referralBalance: user.referralBalance
-        });
+        if (user) res.json({ success: true, balance: user.balance, spent: user.spent, referralCode: user.referralCode, referralBalance: user.referralBalance });
         else res.json({ success: false });
+    } catch (err) { res.status(500).json({ success: false }); }
+});
+
+app.get('/api/services', async (req, res) => {
+    try {
+        const data = await Service.find().sort({ category: 1 });
+        res.json(data);
+    } catch (err) { res.json([]); }
+});
+
+app.post('/api/order', async (req, res) => {
+    const { userEmail, serviceId, serviceName, link, quantity, charge, comments } = req.body;
+    const cost = typeof charge === 'string' ? parseFloat(charge.replace(/[^0-9.]/g, '')) : charge;
+    try {
+        const user = await User.findOne({ email: userEmail });
+        if (!user || user.balance < cost) return res.json({ success: false, error: "Insufficient Balance" });
+        const params = { key: MY_API_KEY, action: 'add', service: serviceId, link, quantity };
+        if (comments) params.comments = comments.trim();
+        const providerRes = await axios.post(SHWEBOOST_API, null, { params });
+        if (providerRes.data && providerRes.data.order) {
+            user.balance -= cost; user.spent += cost; await user.save();
+            const newOrder = new Order({ userEmail, shweOrderId: providerRes.data.order, serviceName, link, quantity, charge: cost });
+            await newOrder.save();
+            res.json({ success: true, orderId: providerRes.data.order });
+        } else { res.json({ success: false, error: providerRes.data.error || "Provider Busy" }); }
+    } catch (err) { res.json({ success: false, error: "Network Error" }); }
+});
+
+app.get('/api/orders/:email', async (req, res) => {
+    try {
+        const list = await Order.find({ userEmail: req.params.email }).sort({ date: -1 });
+        res.json({ success: true, orders: list });
     } catch (err) { res.status(500).json({ success: false }); }
 });
 
@@ -207,67 +273,9 @@ app.post('/api/referral/claim', async (req, res) => {
     const { email } = req.body;
     try {
         const user = await User.findOne({ email });
-        if (!user) return res.json({ success: false, error: "User not found" });
-        if (user.referralBalance < 1000) {
-            return res.json({ success: false, error: "အနည်းဆုံး ၁၀၀၀ ကျပ်ပြည့်မှ ထည့်သွင်းနိုင်ပါမည်။" });
-        }
-        user.balance += user.referralBalance;
-        user.referralBalance = 0; 
-        await user.save();
+        if (!user) return res.json({ success: false });
+        if (user.referralBalance < 1000) return res.json({ success: false, error: "Min 1000 MMK" });
+        user.balance += user.referralBalance; user.referralBalance = 0; await user.save();
         res.json({ success: true, newBalance: user.balance });
-    } catch (err) { res.status(500).json({ success: false }); }
-});
-
-app.post('/api/order', async (req, res) => {
-    const { userEmail, serviceId, serviceName, link, quantity, charge, comments } = req.body;
-    const finalCharge = typeof charge === 'string' ? parseFloat(charge.replace(/[^0-9.]/g, '')) : charge;
-
-    try {
-        const user = await User.findOne({ email: userEmail });
-        if (!user || user.balance < finalCharge) {
-            return res.json({ success: false, error: "Insufficient balance!" });
-        }
-
-        const apiParams = {
-            key: MY_API_KEY,
-            action: 'add',
-            service: serviceId,
-            link: link,
-            quantity: quantity
-        };
-
-        if (comments && comments.trim() !== "") {
-            apiParams.comments = comments.trim();
-        }
-
-        const shweResponse = await axios.post(SHWEBOOST_API, null, { params: apiParams });
-
-        if (shweResponse.data && shweResponse.data.order) {
-            user.balance -= finalCharge;
-            user.spent += finalCharge;
-            await user.save();
-
-            const newOrder = new Order({
-                userEmail,
-                shweOrderId: shweResponse.data.order,
-                serviceName,
-                link,
-                quantity,
-                charge: finalCharge
-            });
-            await newOrder.save();
-            res.json({ success: true, orderId: shweResponse.data.order });
-        } else {
-            res.json({ success: false, error: shweResponse.data.error || "Provider API Error" });
-        }
-    } catch (err) { 
-        res.json({ success: false, error: "Server connection error" }); 
-    }
-});
-
-app.get('/api/orders/:email', async (req, res) => {
-    try {
-        const orders = await Order.find({ userEmail: req.params.email }).sort({ date: -1 });
-        res.json({ success: true, orders });
     } catch (err) { res.status(500).json({ success: false }); }
 });
