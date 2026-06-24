@@ -237,6 +237,16 @@ app.get('/api/user/:email', async (req, res) => {
     } catch (err) { res.status(500).json({ success: false }); }
 });
 
+app.post('/api/user/update-password', async (req, res) => {
+    const { email, password } = req.body;
+    try {
+        const hashed = await bcrypt.hash(password, 10);
+        const user = await User.findOneAndUpdate({ email }, { password: hashed });
+        if (user) res.json({ success: true });
+        else res.json({ success: false, error: "User profile context not found" });
+    } catch (err) { res.status(500).json({ success: false }); }
+});
+
 app.get('/api/services', async (req, res) => {
     try {
         const data = await Service.find().sort({ category: 1 });
@@ -246,10 +256,22 @@ app.get('/api/services', async (req, res) => {
 
 app.post('/api/order', async (req, res) => {
     const { userEmail, serviceId, serviceName, link, quantity, charge, comments } = req.body;
-    const cost = typeof charge === 'string' ? parseFloat(charge.replace(/[^0-9.]/g, '')) : charge;
+    let cost = typeof charge === 'string' ? parseFloat(charge.replace(/[^0-9.]/g, '')) : charge;
     try {
         const user = await User.findOne({ email: userEmail });
-        if (!user || user.balance < cost) return res.json({ success: false, error: "Insufficient Balance" });
+        if (!user) return res.json({ success: false, error: "User portfolio session identity missing" });
+        
+        // Backend recalculation validation with automated 10% VIP tier enforcement
+        const targetService = await Service.findOne({ serviceId });
+        if (targetService) {
+            let baseCost = (targetService.price / 1000) * quantity;
+            if (user.spent >= 50000) {
+                baseCost = baseCost * 0.90; // Apply a 10% markdown discount for VIP spend patterns
+            }
+            cost = Math.ceil(baseCost);
+        }
+
+        if (user.balance < cost) return res.json({ success: false, error: "Insufficient Balance" });
         const params = { key: MY_API_KEY, action: 'add', service: serviceId, link, quantity };
         if (comments) params.comments = comments.trim();
         const providerRes = await axios.post(SHWEBOOST_API, null, { params });
