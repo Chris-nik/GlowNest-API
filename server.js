@@ -304,12 +304,11 @@ app.post('/api/order', async (req, res) => {
         const user = await User.findOne({ email: userEmail });
         if (!user) return res.json({ success: false, error: "User profile not found" });
         
-        // Recalculate cost & check VIP tier
         const targetService = await Service.findOne({ serviceId });
         if (targetService) {
             let baseCost = (targetService.price / 1000) * quantity;
             if (user.spent >= 50000) {
-                baseCost = baseCost * 0.90; // Apply 10% VIP discount
+                baseCost = baseCost * 0.90; 
             }
             cost = Math.ceil(baseCost);
         }
@@ -321,7 +320,9 @@ app.post('/api/order', async (req, res) => {
         if (providerRes.data && providerRes.data.order) {
             user.balance -= cost; user.spent += cost; await user.save();
             const newOrder = new Order({ userEmail, shweOrderId: providerRes.data.order, serviceName, link, quantity, charge: cost });
-            await newOrder.save();
+            const savedOrder = await newOrder.save();
+            
+            // Trigger Sales-scale / revenue logging if needed or order log
             res.json({ success: true, orderId: providerRes.data.order });
         } else { res.json({ success: false, error: providerRes.data.error || "Provider Busy" }); }
     } catch (err) { res.json({ success: false, error: "Network Error" }); }
@@ -337,10 +338,13 @@ app.get('/api/orders/:email', async (req, res) => {
 app.post('/api/referral/claim', async (req, res) => {
     const { email } = req.body;
     try {
-        const user = await User.findOne({ email });
-        if (!user) return res.json({ success: false });
-        if (user.referralBalance < 1000) return res.json({ success: false, error: "Min 1000 MMK" });
-        user.balance += user.referralBalance; user.referralBalance = 0; await user.save();
-        res.json({ success: true, newBalance: user.balance });
+        const user = `await User.findOne({ email });` // (Fixed inline just in case)
+        const foundUser = await User.findOne({ email });
+        if (!foundUser) return res.json({ success: false });
+        if (foundUser.referralBalance < 1000) return res.json({ success: false, error: "Min 1000 MMK" });
+        foundUser.balance += foundUser.referralBalance; 
+        foundUser.referralBalance = 0; 
+        await foundUser.save();
+        res.json({ success: true, newBalance: foundUser.balance });
     } catch (err) { res.status(500).json({ success: false }); }
 });
