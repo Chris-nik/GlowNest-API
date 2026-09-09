@@ -8,6 +8,7 @@ dns.setServers(['8.8.8.8', '8.8.4.4']);
 
 require('dotenv').config();
 const express = require('express');
+const path = require('path'); // Static files တွေအတွက် လိုအပ်တဲ့ path module
 const axios = require('axios');
 const cors = require('cors');
 const mongoose = require('mongoose');
@@ -22,6 +23,15 @@ app.use(cors({
     allowedHeaders: ['Content-Type', 'Authorization']
 }));
 app.use(express.json());
+
+// ------------------------------------------
+// 0. STATIC FRONTEND & ADMIN ROUTES
+// ------------------------------------------
+app.use(express.static(path.join(__dirname, 'public')));
+
+app.get('/admin', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'admin.html'));
+});
 
 // ------------------------------------------
 // 1. DATABASE CONNECTIVITY
@@ -322,7 +332,6 @@ app.post('/api/order', async (req, res) => {
             const newOrder = new Order({ userEmail, shweOrderId: providerRes.data.order, serviceName, link, quantity, charge: cost });
             const savedOrder = await newOrder.save();
             
-            // Trigger Sales-scale / revenue logging if needed or order log
             res.json({ success: true, orderId: providerRes.data.order });
         } else { res.json({ success: false, error: providerRes.data.error || "Provider Busy" }); }
     } catch (err) { res.json({ success: false, error: "Network Error" }); }
@@ -338,7 +347,6 @@ app.get('/api/orders/:email', async (req, res) => {
 app.post('/api/referral/claim', async (req, res) => {
     const { email } = req.body;
     try {
-        const user = `await User.findOne({ email });` // (Fixed inline just in case)
         const foundUser = await User.findOne({ email });
         if (!foundUser) return res.json({ success: false });
         if (foundUser.referralBalance < 1000) return res.json({ success: false, error: "Min 1000 MMK" });
