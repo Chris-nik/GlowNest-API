@@ -14,7 +14,13 @@ const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 
 const app = express();
-app.use(cors());
+
+// Global CORS & JSON parser setup
+app.use(cors({
+    origin: '*',
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization']
+}));
 app.use(express.json());
 
 // ------------------------------------------
@@ -39,6 +45,10 @@ mongoose.connect(MONGODB_URI, {
         console.log("❌ DATABASE STATUS: FAILED", err.message);
         process.exit(1);
     });
+
+mongoose.connection.on('disconnected', () => {
+    console.log("⚠️ MongoDB connection disconnected.");
+});
 
 // ------------------------------------------
 // 2. SCHEMAS & MODELS
@@ -94,6 +104,7 @@ const BalanceHistory = mongoose.model('BalanceHistory', balanceHistorySchema);
 // ------------------------------------------
 const SHWEBOOST_API = "https://shweboost.com/api/v2";
 const MY_API_KEY = process.env.SHWEBOOST_API_KEY || "b9add3c4b63fb0e7cc7a01362f8eb69d"; 
+const ADMIN_KEY = process.env.ADMIN_PASSWORD || "2791126SP";
 
 async function syncOrderStatuses() {
     console.log("🔄 Starting Order Status Sync...");
@@ -165,12 +176,20 @@ setInterval(syncOrderStatuses, 600000);
 setInterval(syncServices, 3600000);    
 
 // ------------------------------------------
-// 4. ADMIN ROUTES
+// 4. GENERAL & HEALTH ROUTES
+// ------------------------------------------
+
+app.get('/api/health', (req, res) => {
+    res.json({ success: true, status: "ONLINE", message: "GlowNest Server Active" });
+});
+
+// ------------------------------------------
+// 5. ADMIN ROUTES
 // ------------------------------------------
 
 app.post('/api/admin/add-balance', async (req, res) => {
     const { email, amount, adminPassword } = req.body;
-    if (adminPassword !== "2791126SP") return res.json({ success: false, error: "Access Denied" });
+    if (adminPassword !== ADMIN_KEY) return res.json({ success: false, error: "Access Denied" });
 
     try {
         const user = await User.findOneAndUpdate(
@@ -199,8 +218,32 @@ app.get('/api/admin/total-orders', async (req, res) => {
     } catch (err) { res.json({ success: true, total: 0 }); }
 });
 
+app.get('/api/admin/sales-scale', async (req, res) => {
+    try {
+        const scale = await Order.aggregate([
+            {
+                $group: {
+                    _id: { $dateToString: { format: "%Y-%m-%d", date: "$date" } },
+                    totalOrders: { $sum: 1 },
+                    totalSales: { $sum: "$charge" }
+                }
+            },
+            { $sort: { _id: 1 } },
+            {
+                $project: {
+                    _id: 0,
+                    date: "$_id",
+                    totalOrders: 1,
+                    totalSales: 1
+                }
+            }
+        ]);
+        res.json({ success: true, scale });
+    } catch (err) { res.status(500).json({ success: false, scale: [] }); }
+});
+
 // ------------------------------------------
-// 5. USER & STORE ROUTES
+// 6. USER & STORE ROUTES
 // ------------------------------------------
 
 app.post('/api/signup', async (req, res) => {
@@ -259,14 +302,14 @@ app.post('/api/order', async (req, res) => {
     let cost = typeof charge === 'string' ? parseFloat(charge.replace(/[^0-9.]/g, '')) : charge;
     try {
         const user = await User.findOne({ email: userEmail });
-        if (!user) return res.json({ success: false, error: "User portfolio session identity missing" });
+        if (!user) return res.json({ success: false, error: "User profile not found" });
         
-        // Backend recalculation validation with automated 10% VIP tier enforcement
+        // Recalculate cost & check VIP tier
         const targetService = await Service.findOne({ serviceId });
         if (targetService) {
             let baseCost = (targetService.price / 1000) * quantity;
             if (user.spent >= 50000) {
-                baseCost = baseCost * 0.90; // Apply a 10% markdown discount for VIP spend patterns
+                baseCost = baseCost * 0.90; // Apply 10% VIP discount
             }
             cost = Math.ceil(baseCost);
         }
