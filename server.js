@@ -29,6 +29,12 @@ app.use(express.json());
 // ------------------------------------------
 app.use(express.static(path.join(__dirname, 'public')));
 
+// Main Dashboard (User Interface)
+app.get('/', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+// Admin Dashboard
 app.get('/admin', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'admin.html'));
 });
@@ -136,11 +142,11 @@ async function syncOrderStatuses() {
                             $inc: { balance: order.charge, spent: -order.charge } 
                         });
                         await Order.updateOne({ _id: order._id }, { status: newStatus, refunded: true });
-                        console.log(`💰 Refunded ${order.charge} MMK to${order.userEmail}`);
+                        console.log(`💰 Refunded ${order.charge} MMK to ${order.userEmail}`);
                     } 
                     else if (order.status !== newStatus) {
                         await Order.updateOne({ _id: order._id }, { status: newStatus });
-                        console.log(`📦 Order ${order.shweOrderId} updated to${newStatus}`);
+                        console.log(`📦 Order ${order.shweOrderId} updated to ${newStatus}`);
                     }
                 }
             } catch (e) { console.log(`Error syncing order ${order.shweOrderId}`); }
@@ -191,60 +197,6 @@ setInterval(syncServices, 3600000);
 
 app.get('/api/health', (req, res) => {
     res.json({ success: true, status: "ONLINE", message: "GlowNest Server Active" });
-});
-
-// ------------------------------------------
-// 4.1. AUTO TOP-UP WEBHOOK ROUTE (SMS RECEIVED)
-// ------------------------------------------
-app.post('/api/auto-topup', async (req, res) => {
-    try {
-        // SMS Forwarder App က ပို့ပေးမယ့် Data တွေ (message, sender, secret etc.)
-        const { message, sender, secret } = req.body;
-        
-        console.log("📥 Incoming SMS from:", sender, "Message:", message);
-
-        // လုံခြုံရေးအတွက် Secret Key စစ်ချင်ရင် ဒီနေရာမှာ ထည့်လို့ရပါတယ် (Optional)
-        // if (secret !== "YOUR_SECRET_KEY") return res.status(403).json({ success: false, error: "Unauthorized" });
-
-        // ဥပမာ - SMS ထဲမှာ User ရဲ့ Email သို့မဟုတ် ငွေပမာဏ ပါလာပုံစံကို Regex သို့မဟုတ် Text Parsing ဖြင့် ရှာဖွေခြင်း
-        // (ဖုန်းထဲက SMS App ပေါ်မူတည်ပြီး message ထဲက Amount နဲ့ Email/Phone ကို ဖြတ်ထုတ်ရပါမယ်)
-        
-        // နမူနာအနေဖြင့် Request ထဲမှာ email နဲ့ amount တိုက်ရိုက်ပါလာရင်:
-        const { email, amount } = req.body; 
-
-        if (!email || !amount) {
-            return res.status(400).json({ success: false, error: "Missing email or amount in payload" });
-        }
-
-        const parsedAmount = parseFloat(amount);
-        if (isNaN(parsedAmount) || parsedAmount <= 0) {
-            return res.status(400).json({ success: false, error: "Invalid amount" });
-        }
-
-        // User ကို ရှာပြီး Balance ပေါင်းပေးခြင်း
-        const user = await User.findOne({ email });
-        if (!user) {
-            return res.status(404).json({ success: false, error: "User not found for auto top-up" });
-        }
-
-        user.balance += parsedAmount;
-        await user.save();
-
-        // Balance History မှတ်တမ်းတင်ခြင်း
-        const log = new BalanceHistory({ 
-            email: user.email, 
-            amount: parsedAmount, 
-            type: 'Auto Top-up (SMS)' 
-        });
-        await log.save();
-
-        console.log(`✅ Auto Top-up Successful: Added ${parsedAmount} to${user.email}`);
-        res.json({ success: true, message: "Balance updated successfully", newBalance: user.balance });
-
-    } catch (err) {
-        console.error("❌ Auto Top-up Error:", err.message);
-        res.status(500).json({ success: false, error: err.message });
-    }
 });
 
 // ------------------------------------------
