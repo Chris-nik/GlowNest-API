@@ -165,12 +165,15 @@ async function syncServices() {
             const ADJUSTED_EXCHANGE = 3500; 
             const PROFIT_PERCENT = 1.20; 
 
+            // Shweboost ဘက်က လက်ရှိ active ဖြစ်နေသော ID များအားလုံးကို Array အဖြစ်သိမ်းရန်
+            const activeShweboostIds = response.data.map(s => String(s.service));
+
             for (let s of response.data) {
                 const usdRate = parseFloat(s.rate);
                 const finalPrice = Math.ceil(usdRate * ADJUSTED_EXCHANGE * PROFIT_PERCENT); 
 
                 await Service.findOneAndUpdate(
-                    { serviceId: s.service },
+                    { serviceId: String(s.service) },
                     { 
                         name: s.name, 
                         category: s.category, 
@@ -183,7 +186,13 @@ async function syncServices() {
                     { upsert: true }
                 );
             }
-            console.log("✅ Service Database Updated.");
+
+            // Shweboost ဘက်တွင် မရှိတော့သော (ဖြုတ်လိုက်သော) local service များကို ရှင်းထုတ်ရန်
+            const deleteResult = await Service.deleteMany({
+                serviceId: { $nin: activeShweboostIds }
+            });
+
+            console.log(`✅ Service Database Updated. Removed ${deleteResult.deletedCount} outdated services.`);
         }
     } catch (err) { console.log("❌ Service Sync Fail: " + err.message); }
 }
@@ -239,14 +248,12 @@ app.get('/api/admin/sales-scale', async (req, res) => {
         const scale = await Order.aggregate([
             {
                 $group: {
-                    _id: { $dateToString: { format: "%Y-%m-%d", date: "$date" } },
+                    _id: { $dateToString: { format: "\%Y-\%m-\%d", date: "$date" } },
                     totalOrders: { $sum: 1 },
                     totalSales: { $sum: "$charge" }
                 }
             },
-            { $sort: { _id: 1 } },
-            {
-                $project: {
+            { $sort: { _id: 1 } },             {$project: {
                     _id: 0,
                     date: "$_id",
                     totalOrders: 1,
